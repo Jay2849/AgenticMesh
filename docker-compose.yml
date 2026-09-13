@@ -1,0 +1,72 @@
+version: "3.9"
+services:
+  redis:
+    image: redis:alpine
+    ports:
+      - "6379:6379"
+
+  db:
+    image: ankane/pgvector:latest
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: agenticmesh
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./db:/docker-entrypoint-initdb.d
+
+  mock-services:
+    build: ./mock-services
+    ports:
+      - "8000:8000"
+      - "8001:8001"
+      - "8002:8002"
+      - "8003:8003"
+    environment:
+      - HOSTNAME=mock-services-payment-service-1
+
+  ingestion-daemon:
+    build: ./ingestion-daemon
+    depends_on:
+      - mock-services
+      - redis
+    env_file: .env
+    environment:
+      - UPSTASH_REDIS_URL=redis://redis:6379/0
+    ports:
+      - "8080:8080"
+
+  diagnosis-engine:
+    build: ./diagnosis-engine
+    depends_on:
+      - ingestion-daemon
+      - redis
+      - db
+    env_file: .env
+    environment:
+      - UPSTASH_REDIS_URL=redis://redis:6379/0
+
+  dashboard:
+    build: ./dashboard
+    ports:
+      - "3000:3000"
+    env_file: .env
+    environment:
+      - UPSTASH_REDIS_URL=redis://redis:6379/0
+    depends_on:
+      - redis
+
+  remediation-engine:
+    build: ./remediation-engine
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    env_file: .env
+    environment:
+      - UPSTASH_REDIS_URL=redis://redis:6379/0
+    depends_on:
+      - redis
+
+networks:
+  default:
+    driver: bridge
