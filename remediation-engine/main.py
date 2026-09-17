@@ -22,13 +22,13 @@ def main():
                 incident_id = data.get("incident_id")
                 decision = data.get("decision")
                 action = data.get("action")
+                service = data.get("service", "payment-service") # dynamically parsed from payload
                 
                 print(f"Received approval event for {incident_id}: {decision}")
                 
                 if decision == "APPROVED":
-                    # Assume we have the full RCA data in Postgres or Redis to get the diff and service
-                    # For demo simplicity, we hardcode the service name based on incident_id or assume payment-service
-                    service_name = "mock-services-payment-service-1" # typical docker-compose name
+                    # Dynamically construct container name
+                    service_name = f"mock-services-{service}-1"
                     
                     success = rollback_container(service_name, "v2.0")
                     pr_url = create_pull_request(incident_id, "mock diff")

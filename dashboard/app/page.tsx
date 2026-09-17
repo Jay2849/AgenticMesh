@@ -10,6 +10,15 @@ export default function Dashboard() {
   const [logs, setLogs] = useState<any[]>([]);
 
   useEffect(() => {
+    fetch("/api/incidents")
+      .then(r => r.json())
+      .then(data => {
+        if (Array.isArray(data)) {
+          setIncidents(data);
+        }
+      })
+      .catch(console.error);
+
     const socket = io();
 
     socket.on("incident", (data) => {
