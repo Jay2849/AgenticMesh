@@ -6,10 +6,24 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"ingestion-daemon/collector"
 	"ingestion-daemon/redisclient"
+)
+
+var (
+	incidentsIngested = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "agenticmesh_incidents_ingested_total",
+		Help: "The total number of ingested incidents",
+	})
 )
 
 func main() {
@@ -34,7 +48,9 @@ func main() {
 		}
 	}()
 
-	http.HandleFunc("/ingest", func(w http.ResponseWriter, r *http.Request) {
+	mux := http.NewServeMux()
+
+	mux.HandleFunc("/ingest", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
@@ -53,23 +69,48 @@ func main() {
 			return
 		}
 
-		// Only process non-health events if they are errors
 		if event.Level == "ERROR" || event.Level == "CRITICAL" {
 			dedup.Process(event)
+			incidentsIngested.Inc()
 		}
 
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprintf(w, "{\"status\": \"ingested\"}")
 	})
 
-	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprintf(w, "{\"status\": \"OK\"}")
 	})
 
+	mux.Handle("/metrics", promhttp.Handler())
+
 	port := "8080"
-	log.Printf("Starting Ingestion Daemon on port %s", port)
-	if err := http.ListenAndServe(":"+port, nil); err != nil {
-		log.Fatalf("Server failed: %v", err)
+	server := &http.Server{
+		Addr:    ":" + port,
+		Handler: mux,
 	}
+
+	go func() {
+		log.Printf("Starting Ingestion Daemon on port %s", port)
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("Server failed: %v", err)
+		}
+	}()
+
+	// Graceful shutdown
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+	<-stop
+
+	log.Println("Shutting down server...")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := server.Shutdown(ctx); err != nil {
+		log.Fatalf("Server forced to shutdown: %v", err)
+	}
+
+	log.Println("Server exiting")
 }
